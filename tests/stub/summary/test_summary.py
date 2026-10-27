@@ -1,3 +1,4 @@
+import copy
 import json
 from contextlib import contextmanager
 
@@ -6,13 +7,13 @@ from nutkit.frontend import Driver
 from tests.shared import (
     get_dns_resolved_server_address,
     get_driver_name,
-    TestkitTestCase,
 )
 from tests.stub.shared import StubServer
+from tests.stub.summary._base import _TestSummaryBase
 
 
-class _TestSummaryBase(TestkitTestCase):
-    """Test result summary contents."""
+class _TestSummaryBaseBolt(_TestSummaryBase):
+    """Test result summary contents via BOLT."""
 
     full_notifications_feat = types.Feature.API_DRIVER_NOTIFICATIONS_CONFIG
     version_folder = ()
@@ -49,8 +50,52 @@ class _TestSummaryBase(TestkitTestCase):
             list(result)
             return result.consume()
 
+    def assert_plan_equal(self, actual, expected):
+        missing_stats_detectable = self.driver_supports_features(
+            types.Feature.API_SUMMARY_PROFILE_OPTIONAL_STATS
+        )
 
-class _TestSummaryDiscardMixin(_TestSummaryBase):
+        def adjust_expected(actual_child, expected_child):
+            for key in [k for k, v in expected_child.items() if v is None]:
+                if key not in actual_child:
+                    expected_child.pop(key)
+            for key in (k for k, v in actual_child.items() if v is None):
+                expected_child.setdefault(key, None)
+
+            if not missing_stats_detectable:
+                for key, actual_value in actual_child.items():
+                    if actual_value == 0 and expected_child.get(key) is None:
+                        expected_child[key] = 0
+
+            # drivers are free to represent lack of children with either:
+            #   * an empty list
+            #   * a null value
+            #   * lack of the key
+            expected_children = expected_child.get("children")
+            expected_has_no_children = expected_children in (None, [])
+            actual_children = actual_child.get("children")
+            actual_has_no_children = actual_children in (None, [])
+
+            if expected_has_no_children and actual_has_no_children:
+                if "children" in actual_child:
+                    expected_child["children"] = actual_children
+                else:
+                    expected_child.pop("children", None)
+                return
+
+            expected_children = expected_children or []
+            actual_children = actual_children or []
+            if len(expected_children) == len(actual_children):
+                for ac, ec in zip(actual_children, expected_children):
+                    adjust_expected(ac, ec)
+
+        actual = copy.deepcopy(actual)
+        expected = copy.deepcopy(expected)
+        adjust_expected(actual, expected)
+        self.assertEqual(actual, expected)
+
+
+class _TestSummaryDiscardMixin(_TestSummaryBaseBolt):
     def _get_summary(self, script, vars_=None):
         with self._get_session(script, vars_=vars_, fetch_size=1) as session:
             result = session.run("RETURN 1 AS n")
@@ -58,7 +103,7 @@ class _TestSummaryDiscardMixin(_TestSummaryBase):
             return result.consume()
 
 
-class TestSummaryBasicInfo(_TestSummaryBase):
+class TestSummaryBasicInfo(_TestSummaryBaseBolt):
     required_features = types.Feature.BOLT_4_4,
     version_folder = "v4x4",
 
@@ -118,6 +163,11 @@ class TestSummaryBasicInfo(_TestSummaryBase):
                     e.exception.errorType,
                     "org.neo4j.driver.exceptions.ProtocolException"
                 )
+            elif driver in ["ruby"]:
+                self.assertEqual(
+                    e.exception.errorType,
+                    "Neo4j::Driver::Exceptions::ProtocolException"
+                )
             elif driver in ["go"]:
                 self.assertEqual(e.exception.errorType, "ProtocolError")
 
@@ -159,13 +209,13 @@ class TestSummaryBasicInfoDiscard(
         super().test_no_times()
 
 
-class TestSummaryNotifications4x4(_TestSummaryBase):
+class TestSummaryNotifications4x4(_TestSummaryBaseBolt):
     required_features = types.Feature.BOLT_4_4,
     version_folder = "v4x4",
 
     def test_no_notifications(self):
         summary = self._get_summary("empty_summary_type_r.script")
-        self.assertEqual(summary.notifications, None)
+        self.assertIn(summary.notifications, ([], None))
 
     def test_empty_notifications(self):
         notifications = []
@@ -175,7 +225,7 @@ class TestSummaryNotifications4x4(_TestSummaryBase):
                 "#NOTIFICATIONS#": json.dumps(notifications)
             }
         )
-        self.assertEqual(summary.notifications, notifications)
+        self.assertIn(summary.notifications, ([], None))
 
     def test_full_notification(self):
         in_notifications = [{
@@ -303,13 +353,13 @@ NO_DATA_GQL_STATUS_OBJECT = {
 }
 
 
-class TestSummaryNotifications5x6(_TestSummaryBase):
+class TestSummaryNotifications5x6(_TestSummaryBaseBolt):
     required_features = types.Feature.BOLT_5_6,
     version_folder = "v5x6",
 
     def test_no_notifications(self):
         summary = self._get_summary("empty_summary_type_r.script")
-        self.assertEqual(summary.notifications, [])
+        self.assertIn(summary.notifications, ([], None))
 
     def test_empty_notifications(self):
         statuses = [SUCCESS_GQL_STATUS_OBJECT]
@@ -319,7 +369,7 @@ class TestSummaryNotifications5x6(_TestSummaryBase):
                 "#STATUSES#": json.dumps(statuses)
             }
         )
-        self.assertEqual(summary.notifications, [])
+        self.assertIn(summary.notifications, ([], None))
 
     def test_full_notification(self):
         in_statuses = [
@@ -518,7 +568,7 @@ class TestSummaryNotifications5x6Discard(
         super().test_multiple_notifications()
 
 
-class _TestSummaryGqlStatusObjectsBase(_TestSummaryBase):
+class _TestSummaryGqlStatusObjectsBase(_TestSummaryBaseBolt):
     def assert_is_non_notification_status(self, status):
         self.assertEqual(status.position, None)
         self.assertEqual(status.classification, "UNKNOWN")
@@ -1353,9 +1403,9 @@ class TestSummaryGqlStatusObjects5x6Discard(
         super().test_fill_diagnostic_record_values()
 
 
-class TestSummaryPlan(_TestSummaryBase):
-    required_features = types.Feature.BOLT_4_4,
-    version_folder = "v4x4",
+class TestSummaryPlan4x4(_TestSummaryBaseBolt):
+    required_features = (types.Feature.BOLT_4_4,)
+    version_folder = ("v4x4",)
 
     def test_plan(self):
         plan = {
@@ -1368,7 +1418,8 @@ class TestSummaryPlan(_TestSummaryBase):
                 "runtime": "PIPELINED",
                 "runtime-impl": "PIPELINED",
                 "version": "CYPHER 4.3",
-                "EstimatedRows": 1.5, "planner": "COST"
+                "EstimatedRows": 1.5,
+                "planner": "COST",
             },
             "operatorType": "ProduceResults@neo4j",
             "children": [
@@ -1376,20 +1427,20 @@ class TestSummaryPlan(_TestSummaryBase):
                     "args": {
                         "Details": "(n)",
                         "EstimatedRows": 1.5,
-                        "PipelineInfo": "Fused in Pipeline 0"
+                        "PipelineInfo": "Fused in Pipeline 0",
                     },
                     "operatorType": "Create@neo4j",
                     "children": [],
-                    "identifiers": ["n"]
+                    "identifiers": ["n"],
                 }
             ],
-            "identifiers": ["n"]
+            "identifiers": ["n"],
         }
         summary = self._get_summary(
             "summary_with_plan.script",
-            vars_={"#PLAN#": json.dumps(plan)}
+            vars_={"#PLAN#": json.dumps(plan)},
         )
-        self.assertEqual(summary.plan, plan)
+        self.assert_plan_equal(summary.plan, plan)
 
     def test_profile(self):
         profile = {
@@ -1406,7 +1457,7 @@ class TestSummaryPlan(_TestSummaryBase):
                 "runtime-version": "4.3",
                 "EstimatedRows": 1.1,
                 "planner": "COST",
-                "Rows": 1
+                "Rows": 1,
             },
             "children": [
                 {
@@ -1418,7 +1469,7 @@ class TestSummaryPlan(_TestSummaryBase):
                         "EstimatedRows": 1.1,
                         "DbHits": 1,
                         "Rows": 1,
-                        "PageCacheHits": 0
+                        "PageCacheHits": 0,
                     },
                     "pageCacheMisses": 0,
                     "children": [],
@@ -1428,22 +1479,22 @@ class TestSummaryPlan(_TestSummaryBase):
                     "time": 0,
                     "rows": 1,
                     "pageCacheHitRatio": 0.1,
-                    "pageCacheHits": 0
+                    "pageCacheHits": 0,
                 }
             ],
             "dbHits": 1,
             "identifiers": ["n"],
             "operatorType": "ProduceResults@neo4j",
-            "rows": 1
+            "rows": 1,
         }
         summary = self._get_summary(
             "summary_with_profile.script",
-            vars_={"#PROFILE#": json.dumps(profile)}
+            vars_={"#PROFILE#": json.dumps(profile)},
         )
-        self.assertEqual(summary.profile, profile)
+        self.assert_plan_equal(summary.profile, profile)
 
 
-class TestSummaryPlanDiscard(_TestSummaryDiscardMixin,  TestSummaryPlan):
+class TestSummaryPlanDiscard4x4(_TestSummaryDiscardMixin, TestSummaryPlan4x4):
     def test_plan(self):
         super().test_plan()
 
@@ -1451,7 +1502,316 @@ class TestSummaryPlanDiscard(_TestSummaryDiscardMixin,  TestSummaryPlan):
         super().test_profile()
 
 
-class TestSummaryCounters(_TestSummaryBase):
+class TestSummaryPlan6x0(_TestSummaryBaseBolt):
+    required_features = (types.Feature.BOLT_6_0,)
+    version_folder = ("v6x0",)
+
+    def test_plan(self):
+        plan = {
+            "args": {
+                "planner-impl": "IDP",
+                "string-representation": (  # noqa: PAR001
+                    "Cypher 5"
+                    "\n"
+                    "\nPlanner COST"
+                    "\n"
+                    "\nRuntime PIPELINED"
+                    "\n"
+                    "\nRuntime version 2026.01"
+                    "\n"
+                    "\nBatch size 128"
+                    "\n"
+                    "\n+-----------------+----+---------+----------------+---------------------+"  # noqa: E501
+                    "\n| Operator        | Id | Details | Estimated Rows | Pipeline            |"  # noqa: E501
+                    "\n+-----------------+----+---------+----------------+---------------------+"  # noqa: E501
+                    "\n| +ProduceResults |  0 | n       |             10 |                     |"  # noqa: E501
+                    "\n| |               +----+---------+----------------+                     |"  # noqa: E501
+                    "\n| +AllNodesScan   |  1 | n       |             10 | Fused in Pipeline 0 |"  # noqa: E501
+                    "\n+-----------------+----+---------+----------------+---------------------+"  # noqa: E501
+                    "\n"
+                    "\nTotal database accesses: ?"
+                    "\n"
+                ),
+                "runtime": "PIPELINED",
+                "runtime-impl": "PIPELINED",
+                "version": "5",
+                "batch-size": 128,
+                "Details": "n",
+                "planner-version": "2026.01",
+                "PipelineInfo": "Fused in Pipeline 0",
+                "runtime-version": "2026.01",
+                "Id": 0,
+                "EstimatedRows": 10.0,
+                "planner": "COST",
+            },
+            "children": [
+                {
+                    "args": {
+                        "Details": "n",
+                        "Id": 1,
+                        "EstimatedRows": 10.0,
+                        "PipelineInfo": "Fused in Pipeline 0",
+                    },
+                    "identifiers": ["n"],
+                    "operatorType": "AllNodesScan@neo4j",
+                }
+            ],
+            "identifiers": ["n"],
+            "operatorType": "ProduceResults@neo4j",
+        }
+        summary = self._get_summary(
+            "summary_with_plan.script",
+            vars_={"#PLAN#": json.dumps(plan)},
+        )
+        self.assert_plan_equal(summary.plan, plan)
+
+    def test_profile(self):
+        profile = {
+            "args": {
+                "GlobalMemory": 312,
+                "planner-impl": "IDP",
+                "Memory": 0,
+                "string-representation": (  # noqa: PAR001
+                    "Cypher 5\n"
+                    "\n"
+                    "Planner COST\n"
+                    "\n"
+                    "Runtime PIPELINED\n"
+                    "\n"
+                    "Runtime version 2026.01\n"
+                    "\n"
+                    "Batch size 128\n"
+                    "\n"
+                    "+-----------------+----+---------+----------------+------+---------+----------------+------------------------+-----------+---------------------+\n"  # noqa: E501
+                    "| Operator        | Id | Details | Estimated Rows | Rows | DB Hits | Memory (Bytes) | Page Cache Hits/Misses | Time (ms) | Pipeline            |\n"  # noqa: E501
+                    "+-----------------+----+---------+----------------+------+---------+----------------+------------------------+-----------+---------------------+\n"  # noqa: E501
+                    "| +ProduceResults |  0 | n       |             10 |    0 |       0 |              0 |                        |           |                     |\n"  # noqa: E501
+                    "| |               +----+---------+----------------+------+---------+----------------+                        |           |                     |\n"  # noqa: E501
+                    "| +AllNodesScan   |  1 | n       |             10 |    0 |       1 |            248 |                    0/0 |     0.274 | Fused in Pipeline 0 |\n"  # noqa: E501
+                    "+-----------------+----+---------+----------------+------+---------+----------------+------------------------+-----------+---------------------+\n"  # noqa: E501
+                    "\n"
+                    "Total database accesses: 1, total allocated memory: 312\n"
+                    ""
+                ),
+                "runtime": "PIPELINED",
+                "runtime-impl": "PIPELINED",
+                "version": "5",
+                "DbHits": 0,
+                "batch-size": 128,
+                "Details": "n",
+                "planner-version": "2026.01",
+                "PipelineInfo": "Fused in Pipeline 0",
+                "runtime-version": "2026.01",
+                "Id": 0,
+                "EstimatedRows": 10.0,
+                "planner": "COST",
+                "Rows": 0,
+            },
+            "children": [
+                {
+                    "args": {
+                        "Details": "n",
+                        "PipelineInfo": "Fused in Pipeline 0",
+                        "Memory": 248,
+                        "Time": 273643,
+                        "Id": 1,
+                        "EstimatedRows": 10.0,
+                        "PageCacheMisses": 0,
+                        "DbHits": 1,
+                        "Rows": 0,
+                        "PageCacheHits": 0,
+                    },
+                    "pageCacheMisses": 0,
+                    "dbHits": 1,
+                    "identifiers": ["n"],
+                    "operatorType": "AllNodesScan@neo4j",
+                    "time": 273643,
+                    "rows": 0,
+                    "pageCacheHitRatio": 0.0,
+                    "pageCacheHits": 0,
+                }
+            ],
+            "dbHits": 0,
+            "identifiers": ["n"],
+            "operatorType": "ProduceResults@neo4j",
+            "rows": 0,
+        }
+        summary = self._get_summary(
+            "summary_with_profile.script",
+            vars_={"#PROFILE#": json.dumps(profile)},
+        )
+        self.assert_plan_equal(summary.profile, profile)
+
+    def test_profile_no_db_hit(self):
+        profile = {
+            "args": {},
+            "children": [
+                {
+                    "args": {},
+                    "identifiers": ["n"],
+                    "operatorType": "AllNodesScan@neo4j",
+                    "time": 273643,
+                    "rows": 1,
+                    "pageCacheHitRatio": 1.2,
+                    "pageCacheHits": 3,
+                    "pageCacheMisses": 4,
+                }
+            ],
+            "rows": 0,
+            "pageCacheHitRatio": 0.0,
+            "pageCacheHits": 0,
+            "pageCacheMisses": 0,
+            "time": 123456,
+            "identifiers": ["n"],
+            "operatorType": "ProduceResults@neo4j",
+        }
+        if not self.driver_supports_features(
+            types.Feature.API_SUMMARY_PROFILE_OPTIONAL_STATS
+        ):
+            # cutting unified drivers some extra slack:
+            # some drivers assume that the top-level profile element never
+            # contains stats
+            profile = {
+                "args": {},
+                "children": [profile],
+                "identifiers": ["coolio!"],
+                "operatorType": "TestKitWrapperForStrictDrivers",
+            }
+        summary = self._get_summary(
+            "summary_with_profile.script",
+            vars_={"#PROFILE#": json.dumps(profile)},
+        )
+        self.assert_plan_equal(summary.profile, profile)
+
+    def test_profile_no_time(self):
+        profile = {
+            "args": {},
+            "children": [
+                {
+                    "args": {},
+                    "identifiers": ["n"],
+                    "operatorType": "AllNodesScan@neo4j",
+                    "dbHits": 0,
+                    "rows": 0,
+                    "pageCacheHitRatio": 1.2,
+                    "pageCacheHits": 3,
+                    "pageCacheMisses": 4,
+                }
+            ],
+            "dbHits": 123,
+            "rows": 1,
+            "pageCacheHitRatio": 0.0,
+            "pageCacheHits": 0,
+            "pageCacheMisses": 0,
+            "identifiers": ["n"],
+            "operatorType": "ProduceResults@neo4j",
+        }
+        if not self.driver_supports_features(
+            types.Feature.API_SUMMARY_PROFILE_OPTIONAL_STATS
+        ):
+            # cutting unified drivers some extra slack:
+            # some drivers assume that the top-level profile element never
+            # contains stats
+            profile = {
+                "args": {},
+                "children": [profile],
+                "identifiers": ["coolio!"],
+                "operatorType": "TestKitWrapperForStrictDrivers",
+            }
+        summary = self._get_summary(
+            "summary_with_profile.script",
+            vars_={"#PROFILE#": json.dumps(profile)},
+        )
+        self.assert_plan_equal(summary.profile, profile)
+
+    def test_profile_no_rows(self):
+        profile = {
+            "args": {},
+            "children": [
+                {
+                    "args": {},
+                    "identifiers": ["n"],
+                    "operatorType": "AllNodesScan@neo4j",
+                    "dbHits": 123,
+                    "time": 0,
+                    "pageCacheHitRatio": 0.0,
+                    "pageCacheHits": 0,
+                    "pageCacheMisses": 0,
+                }
+            ],
+            "dbHits": 0,
+            "time": 0,
+            "pageCacheHitRatio": 1.2,
+            "pageCacheHits": 3,
+            "pageCacheMisses": 4,
+            "identifiers": ["n"],
+            "operatorType": "ProduceResults@neo4j",
+        }
+        if not self.driver_supports_features(
+            types.Feature.API_SUMMARY_PROFILE_OPTIONAL_STATS
+        ):
+            # cutting unified drivers some extra slack:
+            # some drivers assume that the top-level profile element never
+            # contains stats
+            profile = {
+                "args": {},
+                "children": [profile],
+                "identifiers": ["coolio!"],
+                "operatorType": "TestKitWrapperForStrictDrivers",
+            }
+        summary = self._get_summary(
+            "summary_with_profile.script",
+            vars_={"#PROFILE#": json.dumps(profile)},
+        )
+        self.assert_plan_equal(summary.profile, profile)
+
+    def test_profile_no_page_cache_stats(self):
+        profile = {
+            "args": {},
+            "children": [
+                {
+                    "args": {},
+                    "identifiers": ["n"],
+                    "operatorType": "AllNodesScan@neo4j",
+                    "dbHits": 123,
+                    "rows": 3456,
+                    "time": 0,
+                }
+            ],
+            "dbHits": 0,
+            "rows": 5,
+            "time": 0,
+            "identifiers": ["n"],
+            "operatorType": "ProduceResults@neo4j",
+        }
+        if not self.driver_supports_features(
+            types.Feature.API_SUMMARY_PROFILE_OPTIONAL_STATS
+        ):
+            # cutting unified drivers some extra slack:
+            # some drivers assume that the top-level profile element never
+            # contains stats
+            profile = {
+                "args": {},
+                "children": [profile],
+                "identifiers": ["coolio!"],
+                "operatorType": "TestKitWrapperForStrictDrivers",
+            }
+        summary = self._get_summary(
+            "summary_with_profile.script",
+            vars_={"#PROFILE#": json.dumps(profile)},
+        )
+        self.assert_plan_equal(summary.profile, profile)
+
+
+class TestSummaryPlanDiscard6x0(_TestSummaryDiscardMixin, TestSummaryPlan6x0):
+    def test_plan(self):
+        super().test_plan()
+
+    def test_profile(self):
+        super().test_profile()
+
+
+class TestSummaryCounters(_TestSummaryBaseBolt):
     required_features = types.Feature.BOLT_4_4,
     version_folder = "v4x4",
 

@@ -12,6 +12,24 @@ from .client_certificate_provider import (
     ClientCertificateProvider,
 )
 from .driver import Driver
+from .encapsulated_key_repository import EncapsulatedKeyRepository
 from .exceptions import ApplicationCodeError
 from .fake_time import FakeTime
 from .session import Session
+from .transaction import Transaction
+
+__all__ = [
+    "ApplicationCodeError",
+    "AuthTokenManager",
+    "BasicAuthTokenManager",
+    "BearerAuthTokenManager",
+    "BookmarkManager",
+    "ClientCertificateHolder",
+    "ClientCertificateProvider",
+    "Driver",
+    "EncapsulatedKeyRepository",
+    "FakeTime",
+    "Neo4jBookmarkManagerConfig",
+    "Session",
+    "Transaction",
+]

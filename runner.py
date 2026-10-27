@@ -1,6 +1,15 @@
 import os
+import subprocess
 
 import docker
+
+USE_RUST = (
+    os.environ.get("TEST_RUSTY_STUB", "").lower()
+    in ("true", "y", "yes", "1", "on")
+)
+
+VENV_PATH = "/root/.venv"
+PYTHON_BIN = f"{VENV_PATH}/bin/python"
 
 
 def _ensure_image(testkit_path, branch_name, artifacts_path):
@@ -13,6 +22,7 @@ def _ensure_image(testkit_path, branch_name, artifacts_path):
         image_name,
         image_path,
         log_path=artifacts_path,
+        args={"BUILD_RUST_STUB": "true" if USE_RUST else "false"},
         build_contexts={"boltstub": boltstub_path},
     )
 
@@ -59,41 +69,79 @@ class Container:
         self._init_container()
 
     def _init_container(self):
-        self._container.exec(["pip3", "install", "-U", "pip"],
-                             log_path=self._build_artifacts_path)
-        self._container.exec(["pip3", "install", "-Ur",
-                              "/testkit/requirements.txt"],
-                             log_path=self._build_artifacts_path)
+        self._container.exec(
+            ["python3", "-m", "venv", VENV_PATH],
+            log_path=self._build_artifacts_path,
+        )
+        pip = (PYTHON_BIN, "-m", "pip")
+        self._container.exec(
+            [*pip, "install", "-U", "pip"],
+            log_path=self._build_artifacts_path,
+        )
+        self._container.exec(
+            [*pip, "install", "-Ur", "/testkit/requirements.txt"],
+            log_path=self._build_artifacts_path,
+        )
 
     def run_stub_tests(self):
-        self._container.exec(["python3", "-m", "tests.stub.suites"])
+        self._container.exec([PYTHON_BIN, "-m", "tests.stub.suites"])
 
     def run_tls_tests(self):
         # Build TLS server
         self._container.exec(
-            ["go", "build", "-v", "."], workdir="/testkit/tlsserver"
+            ["go", "build", "-v", "."],
+            workdir="/testkit/tlsserver",
+            env_map={"GO111MODULE": "off"},
         )
         self._container.exec(
-            ["python3", "-m", "tests.tls.suites"]
+            [PYTHON_BIN, "-m", "tests.tls.suites"]
         )
+
+    def should_run_neo4j_tests(self, neo4j_config):
+        self._update_neo4j_tests_env_config(neo4j_config)
+        try:
+            self._container.exec(
+                [PYTHON_BIN, "-m", "tests.neo4j.version_check"],
+                env_map=self._env
+            )
+        except subprocess.CalledProcessError as e:
+            if e.returncode == 99:
+                print(
+                    "Neo4j tests will be skipped due to incompatible protocol "
+                    "versions between driver and server."
+                )
+                return True
+            raise
+        return False
 
     def run_neo4j_tests(self, suite, hostname, username, password,
                         neo4j_config):
+        self._update_neo4j_tests_env(
+            hostname, username, password, neo4j_config
+        )
+        self._container.exec(
+            [PYTHON_BIN, "-m", "tests.neo4j.suites", suite, neo4j_config.name],
+            env_map=self._env
+        )
+
+    def _update_neo4j_tests_env(self, hostname, username, password,
+                                neo4j_config):
+        self._update_neo4j_tests_env_config(neo4j_config)
         self._env.update({
             # Hostname of Docker container running db
             "TEST_NEO4J_HOST": hostname,
             "TEST_NEO4J_USER": username,
             "TEST_NEO4J_PASS": password,
+            "TEST_NEO4J_DEFAULT_DB": "neo4j",
+        })
+
+    def _update_neo4j_tests_env_config(self, neo4j_config):
+        self._env.update({
             "TEST_NEO4J_SCHEME": neo4j_config.scheme,
             "TEST_NEO4J_VERSION": neo4j_config.version,
             "TEST_NEO4J_EDITION": neo4j_config.edition,
             "TEST_NEO4J_CLUSTER": neo4j_config.cluster,
-            "TEST_NEO4J_DEFAULT_DB": "neo4j",
         })
-        self._container.exec(
-            ["python3", "-m", "tests.neo4j.suites", suite, neo4j_config.name],
-            env_map=self._env
-        )
 
     def run_neo4j_tests_env_config(self):
         for key in ("TEST_NEO4J_HOST",
@@ -110,21 +158,22 @@ class Container:
         suite = os.environ.get("TEST_NEO4J_VERSION", "4.4")
         self._container.exec(
             [
-                "python3", "-m", "tests.neo4j.suites", suite,
+                PYTHON_BIN, "-m", "tests.neo4j.suites", suite,
                 f"external-{suite}"
             ],
             env_map=self._env
         )
 
     def run_selected_stub_tests(self, testpattern):
-        self._container.exec(["python3", "-m", "unittest", "-v", testpattern])
+        self._container.exec([PYTHON_BIN, "-m", "unittest", "-v", testpattern])
 
     def run_selected_tls_tests(self, testpattern):
         # Build TLS server
         self._container.exec(
-            ["go", "build", "-v", "."], workdir="/testkit/tlsserver"
+            ["go", "build", "-buildvcs=false", "-v", "."],
+            workdir="/testkit/tlsserver",
         )
-        self._container.exec(["python3", "-m", "unittest", "-v", testpattern])
+        self._container.exec([PYTHON_BIN, "-m", "unittest", "-v", testpattern])
 
     def run_selected_neo4j_tests(self, test_pattern, hostname, username,
                                  password, neo4j_config):
@@ -140,7 +189,7 @@ class Container:
             "TEST_NEO4J_DEFAULT_DB": "neo4j",
         })
         self._container.exec(
-            ["python3", "-m", "unittest", "-v", test_pattern],
+            [PYTHON_BIN, "-m", "unittest", "-v", test_pattern],
             env_map=self._env
         )
 
@@ -157,6 +206,6 @@ class Container:
         if self._env.get("TEST_NEO4J_HOST") == "localhost":
             self._env.update({"TEST_NEO4J_HOST": "host.docker.internal"})
         self._container.exec(
-            ["python3", "-m", "unittest", "-v", test_pattern],
+            [PYTHON_BIN, "-m", "unittest", "-v", test_pattern],
             env_map=self._env
         )

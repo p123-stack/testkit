@@ -1,4 +1,5 @@
 """Enumerate all the capabilities in the drivers."""
+
 from enum import Enum
 
 
@@ -44,6 +45,10 @@ class Feature(Enum):
     API_DRIVER_SUPPORTS_SESSION_AUTH = "Feature:API:Driver.SupportsSessionAuth"
     # The driver supports connection liveness check.
     API_LIVENESS_CHECK = "Feature:API:Liveness.Check"
+    # The driver offers a public API for client-side property encryption:
+    # encrypting and decrypting individual property values, and managing
+    # encapsulated data encryption keys.
+    API_PROPERTY_ENCRYPTION = "Feature:API:PropertyEncryption"
     # The driver offers a method for the result to return all records as a list
     # or array. This method should exhaust the result.
     API_RESULT_LIST = "Feature:API:Result.List"
@@ -84,12 +89,18 @@ class Feature(Enum):
     # The result summary provides a way to access the transaction's
     # GqlStatusObject.
     API_SUMMARY_GQL_STATUS_OBJECTS = "Feature:API:Summary:GqlStatusObjects"
+    # The profile in the summary provides a way to discern absent values for
+    # fields `rows`, `dbHits`, `time`, and `pageCacheHits`.
+    API_SUMMARY_PROFILE_OPTIONAL_STATS = \
+        "Feature:API:Summary:Profile:OptionalStats"
     # The driver supports sending and receiving geospatial data types.
     API_TYPE_SPATIAL = "Feature:API:Type.Spatial"
     # The driver supports sending and receiving temporal data types.
     API_TYPE_TEMPORAL = "Feature:API:Type.Temporal"
     # The driver supports sending and receiving the unsupported type data type.
     API_TYPE_UNSUPPORTED_TYPE = "Feature:API:Type.UnsupportedType"
+    # The driver supports sending and receiving UUID data types.
+    API_TYPE_UUID = "Feature:API:Type.UUID"
     # The driver supports sending and receiving vector data types.
     API_TYPE_VECTOR = "Feature:API:Type.Vector"
     # The driver supports single-sign-on (SSO) by providing a bearer auth token
@@ -136,11 +147,17 @@ class Feature(Enum):
     BOLT_5_8 = "Feature:Bolt:5.8"
     # The driver supports Bolt protocol version 6.0
     BOLT_6_0 = "Feature:Bolt:6.0"
+    # The driver supports Bolt protocol version 6.1
+    BOLT_6_1 = "Feature:Bolt:6.1"
     # The driver supports negotiating the Bolt protocol version with the server
     # using handshake manifest v1.
     BOLT_HANDSHAKE_MANIFEST_V1 = "Feature:Bolt:HandshakeManifestV1"
     # The driver supports patching DateTimes to use UTC for Bolt 4.3 and 4.4
     BOLT_PATCH_UTC = "Feature:Bolt:Patch:UTC"
+    # The driver support connecting to the HTTP/Query API as initially released
+    HTTP_QUERY_API_2_0 = "Feature:HTTP:QueryAPI:2.0"
+    # The driver retries idempotent errors on session run
+    IDEMPOTENT_RETRIES = "Feature:IdempotentRetries"
     # The driver supports impersonation
     IMPERSONATION = "Feature:Impersonation"
     # The driver supports TLS 1.1 connections.
@@ -172,6 +189,11 @@ class Feature(Enum):
     # The driver caches connections (e.g., in a pool) and doesn't start a new
     # one (with hand-shake, HELLO, etc.) for each query.
     OPT_CONNECTION_REUSE = "Optimization:ConnectionReuse"
+    # Before handing out a pooled connection, the driver checks whether the
+    # operating system already knows the connection is dead (e.g., the server
+    # closed it while it sat idle in the pool) and discards it instead of
+    # failing on the next use.
+    OPT_DEAD_CONNECTION_DETECTION = "Optimization:DeadConnectionDetection"
     # The driver first tries to SUCCESSfully BEGIN a transaction before calling
     # the user-defined transaction function. This way, the (potentially costly)
     # transaction function is not started until a working transaction has been
@@ -230,7 +252,7 @@ class Feature(Enum):
     # The driver understands and follow the connection hint
     # connection.recv_timeout_seconds which tells it to close the connection
     # after not receiving an answer on any request for longer than the given
-    # time period. On timout, the driver should remove the server from its
+    # time period. On timeout, the driver should remove the server from its
     # routing table and assume all other connections to the server are dead
     # as well.
     CONF_HINT_CON_RECV_TIMEOUT = "ConfHint:connection.recv_timeout_seconds"

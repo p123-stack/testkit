@@ -8,6 +8,10 @@ from .auth_token_manager import (
 )
 from .bookmark_manager import BookmarkManager
 from .client_certificate_provider import ClientCertificateProvider
+from .encapsulated_key_repository import (
+    EncapsulatedKeyRepository,
+    InvalidRepositoryRequestError,
+)
 from .session import Session
 
 
@@ -23,7 +27,9 @@ class Driver:
                  notifications_min_severity=None,
                  notifications_disabled_categories=None,
                  telemetry_disabled=None,
-                 client_certificate=None):
+                 client_certificate=None,
+                 disable_auto_commit_retries=None,
+                 property_encryption_profiles=None):
         self._backend = backend
         self._resolver_fn = resolver_fn
         self._domain_name_resolver_fn = domain_name_resolver_fn
@@ -34,14 +40,20 @@ class Driver:
             or auth_token is None
         ):
             self._auth_token = auth_token
-        else:
-            assert isinstance(
-                auth_token, (AuthTokenManager,
-                             BearerAuthTokenManager,
-                             BasicAuthTokenManager)
+        elif isinstance(
+            auth_token,
+            (
+                AuthTokenManager,
+                BearerAuthTokenManager,
+                BasicAuthTokenManager,
             )
+        ):
             self._auth_token_manager = auth_token
             auth_token_manager_id = auth_token.id
+        else:
+            raise TypeError(
+                f"auth_token has unsupported type {type(auth_token)}"
+            )
         client_certificate_, client_certificate_provider_id_ = None, None
         if client_certificate is not None:
             assert isinstance(
@@ -52,6 +64,14 @@ class Driver:
                 client_certificate_ = client_certificate
             else:
                 client_certificate_provider_id_ = client_certificate.id
+
+        self._repository_ids_by_profile = {}
+        property_encryption_profiles_ = None
+        if property_encryption_profiles is not None:
+            property_encryption_profiles_ = [
+                self._encryption_profile_wire(p)
+                for p in property_encryption_profiles
+            ]
 
         req = protocol.NewDriver(
             uri, self._auth_token, auth_token_manager_id,
@@ -69,12 +89,29 @@ class Driver:
             telemetry_disabled=telemetry_disabled,
             client_certificate=client_certificate_,
             client_certificate_provider_id=client_certificate_provider_id_,
+            disable_auto_commit_retries=disable_auto_commit_retries,
+            property_encryption_profiles=property_encryption_profiles_,
         )
-        res = backend.send_and_receive(req)
-        if not isinstance(res, protocol.Driver):
-            raise Exception("Should be Driver but was %s" % res)
+        try:
+            res = backend.send_and_receive(req)
+            if not isinstance(res, protocol.Driver):
+                raise Exception("Should be Driver but was %s" % res)
+        except BaseException:
+            self._forget_repositories()
+            raise
         self._driver = res
         self._closed = False
+
+    def _encryption_profile_wire(self, profile):
+        if isinstance(profile, str):
+            profile = {"name": profile}
+        repository_id = EncapsulatedKeyRepository.create()
+        self._repository_ids_by_profile[profile["name"]] = repository_id
+        wire = {"name": profile["name"], "repositoryId": repository_id}
+        kek = profile.get("kek")
+        if kek is not None:
+            wire["kek"] = kek.hex(" ")
+        return wire
 
     def receive(self, timeout=None, hooks=None, *, allow_resolution):
         while True:
@@ -102,8 +139,13 @@ class Driver:
                 BearerAuthTokenManager,
                 BookmarkManager,
                 ClientCertificateProvider,
+                EncapsulatedKeyRepository,
             ):
-                cb_response = cb_processor.process_callbacks(res)
+                try:
+                    cb_response = cb_processor.process_callbacks(res)
+                except InvalidRepositoryRequestError as error:
+                    self._backend.send(error.reply, hooks=hooks)
+                    raise
                 if cb_response is not None:
                     self._backend.send(cb_response, hooks=hooks)
                     break
@@ -186,11 +228,66 @@ class Driver:
             raise Exception(f"Should be DriverIsEncrypted but was {res}")
         return res.encrypted
 
+    def encrypt_to_bytes(self, value, *, aad=None, profile_name=None,
+                         key_alias=None, key_id=None, iv=None):
+        iv_ = iv.hex(" ") if iv is not None else None
+        req = protocol.EncryptToBytes(
+            self._driver.id, value, aad=aad, profile_name=profile_name,
+            key_alias=key_alias, key_id=key_id, iv=iv_
+        )
+        res = self.send_and_receive(req, allow_resolution=False)
+        if not isinstance(res, protocol.EncryptedValue):
+            raise Exception(f"Should be EncryptedValue but was: {res}")
+        return res.encrypted_bytes
+
+    def decrypt(self, value, *, aad=None, use_persisted_aad=False):
+        req = protocol.Decrypt(
+            self._driver.id, value.hex(" "), aad=aad,
+            use_persisted_aad=use_persisted_aad
+        )
+        res = self.send_and_receive(req, allow_resolution=False)
+        if not isinstance(res, protocol.DecryptedValue):
+            raise Exception(f"Should be DecryptedValue but was: {res}")
+        return res.decrypted_value
+
+    def create_encapsulated_key(self, alias, *, profile_name=None):
+        req = protocol.CreateEncapsulatedKey(
+            self._driver.id, alias, profile_name=profile_name
+        )
+        res = self.send_and_receive(req, allow_resolution=False)
+        if not isinstance(res, protocol.EncapsulatedKey):
+            raise Exception(f"Should be EncapsulatedKey but was: {res}")
+        return res
+
+    def _forget_repositories(self):
+        for repository_id in self._repository_ids_by_profile.values():
+            EncapsulatedKeyRepository.forget(repository_id)
+
+    def import_encapsulated_key(self, key_id, alias, encapsulation, metadata,
+                                *, profile_name=None):
+        EncapsulatedKeyRepository.seed(
+            self._repository_id_for(profile_name), key_id, alias,
+            encapsulation, metadata
+        )
+
+    def _repository_id_for(self, profile_name):
+        if profile_name is not None:
+            return self._repository_ids_by_profile[profile_name]
+        if len(self._repository_ids_by_profile) != 1:
+            raise ValueError(
+                "profile_name is required unless exactly one encryption "
+                "profile is configured"
+            )
+        return next(iter(self._repository_ids_by_profile.values()))
+
     def close(self):
         req = protocol.DriverClose(self._driver.id)
-        res = self.send_and_receive(req, allow_resolution=False)
-        if not isinstance(res, protocol.Driver):
-            raise Exception(f"Should be Driver but was {res}")
+        try:
+            res = self.send_and_receive(req, allow_resolution=False)
+            if not isinstance(res, protocol.Driver):
+                raise Exception(f"Should be Driver but was {res}")
+        finally:
+            self._forget_repositories()
         self._closed = True
         if self._auth_token_manager:
             self._auth_token_manager.close()
@@ -200,7 +297,8 @@ class Driver:
                 bookmark_manager=None,
                 auth_token=None,
                 notifications_min_severity=None,
-                notifications_disabled_categories=None):
+                notifications_disabled_categories=None,
+                disable_auto_commit_retries=None):
         req = protocol.NewSession(
             self._driver.id, access_mode, bookmarks=bookmarks,
             database=database, fetchSize=fetch_size,
@@ -208,7 +306,8 @@ class Driver:
             bookmark_manager=bookmark_manager,
             auth_token=auth_token,
             notifications_min_severity=notifications_min_severity,
-            notifications_disabled_categories=notifications_disabled_categories
+            notifications_disabled_categories=notifications_disabled_categories,  # noqa: E501
+            disable_auto_commit_retries=disable_auto_commit_retries,
         )
         res = self.send_and_receive(req, allow_resolution=False)
         if not isinstance(res, protocol.Session):

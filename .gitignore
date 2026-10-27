@@ -1,4 +1,5 @@
 *.pyc
+__pycache__/
 artifacts
 diagrams/*.png
 driver/*/CAs/*
@@ -7,3 +8,4 @@ tlsserver/tlsserver
 .idea
 *.iml
 .DS_Store
+__pycache__/

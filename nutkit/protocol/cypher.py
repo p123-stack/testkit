@@ -17,6 +17,8 @@ All cypher types are sent from backend as:
 
 import datetime
 import math
+import uuid
+from collections import Counter
 
 
 class CypherNull:
@@ -29,7 +31,7 @@ class CypherNull:
         return "<null>"
 
     def __repr__(self):
-        return "<{}>".format(self.__class__.__name__)
+        return f"<{self.__class__.__name__}>"
 
     def __eq__(self, other):
         return isinstance(other, CypherNull)
@@ -43,7 +45,7 @@ class CypherList:
         return str(list(map(str, self.value)))
 
     def __repr__(self):
-        return "<{}({})>".format(self.__class__.__name__, self.__str__())
+        return f"<{self.__class__.__name__}({self.__str__()})>"
 
     def __eq__(self, other):
         return isinstance(other, CypherList) and other.value == self.value
@@ -54,10 +56,11 @@ class CypherMap:
         self.value = value
 
     def __str__(self):
-        return str({k: str(str(self.value[k])) for k in self.value})
+        return str({k: str(self.value[k]) for k in self.value})
 
     def __repr__(self):
-        return "<{}({})>".format(self.__class__.__name__, self.__str__())
+        members = repr({k: repr(self.value[k]) for k in self.value})
+        return f"<{self.__class__.__name__}({members})>"
 
     def __eq__(self, other):
         return isinstance(other, CypherMap) and other.value == self.value
@@ -71,7 +74,7 @@ class CypherInt:
         return str(self.value)
 
     def __repr__(self):
-        return "<{}({})>".format(self.__class__.__name__, self.__str__())
+        return f"<{self.__class__.__name__}({self.__str__()})>"
 
     def __eq__(self, other):
         return isinstance(other, CypherInt) and other.value == self.value
@@ -85,7 +88,7 @@ class CypherBool:
         return str(self.value)
 
     def __repr__(self):
-        return "<{}({})>".format(self.__class__.__name__, self.__str__())
+        return f"<{self.__class__.__name__}({self.__str__()})>"
 
     def __eq__(self, other):
         return isinstance(other, CypherBool) and other.value == self.value
@@ -110,7 +113,7 @@ class CypherFloat:
         return str(self.value)
 
     def __repr__(self):
-        return "<{}({})>".format(self.__class__.__name__, self.__str__())
+        return f"<{self.__class__.__name__}({self.__str__()})>"
 
     def __eq__(self, other):
         return isinstance(other, CypherFloat) and other.value == self.value
@@ -124,7 +127,7 @@ class CypherString:
         return self.value
 
     def __repr__(self):
-        return "<{}({})>".format(self.__class__.__name__, self.__str__())
+        return f"<{self.__class__.__name__}({self.__str__()})>"
 
     def __eq__(self, other):
         return isinstance(other, CypherString) and other.value == self.value
@@ -135,13 +138,13 @@ class CypherBytes:
         self.value = value
         if isinstance(value, (bytes, bytearray)):
             # e.g. "ff 01"
-            self.value = " ".join("{:02x}".format(byte) for byte in value)
+            self.value = " ".join(f"{byte:02x}" for byte in value)
 
     def __str__(self):
         return self.value
 
     def __repr__(self):
-        return "<{}({})>".format(self.__class__.__name__, self.__str__())
+        return f"<{self.__class__.__name__}({self.__str__()})>"
 
     def __eq__(self, other):
         return isinstance(other, CypherBytes) and other.value == self.value
@@ -166,7 +169,7 @@ class Node:
         )
 
     def __repr__(self):
-        return "<{}(id={}, labels={}, props={}, elementId={})>".format(
+        return "<{}(id={!r}, labels={!r}, props={!r}, elementId={!r})>".format(
             self.__class__.__name__, self.id, self.labels, self.props,
             self.elementId
         )
@@ -174,8 +177,14 @@ class Node:
     def __eq__(self, other):
         if not isinstance(other, Node):
             return False
-        return all(getattr(self, attr) == getattr(other, attr)
-                   for attr in ("id", "labels", "props", "elementId"))
+        self_labels = Counter(label.value for label in self.labels.value)
+        other_labels = Counter(label.value for label in other.labels.value)
+        return (
+            self.id == other.id
+            and self_labels == other_labels
+            and self.props == other.props
+            and self.elementId == other.elementId
+        )
 
 
 # More in line with other naming
@@ -215,16 +224,16 @@ class Relationship:
 
     def __repr__(self):
         return (
-            "<{}(id={}, startNodeId={}, endNodeId={}, type={}, "
-            "props={}, elementId={}, startNodeElementId={}, "
-            "endNodeElementId={})>".format(self.__class__.__name__,
-                                           self.id,
-                                           self.startNodeId, self.endNodeId,
-                                           self.type,
-                                           self.props,
-                                           self.elementId,
-                                           self.startNodeElementId,
-                                           self.endNodeElementId)
+            "<{}(id={!r}, startNodeId={!r}, endNodeId={!r}, type={!r}, "
+            "props={!r}, elementId={!r}, startNodeElementId={!r}, "
+            "endNodeElementId={!r})>".format(self.__class__.__name__,
+                                             self.id,
+                                             self.startNodeId, self.endNodeId,
+                                             self.type,
+                                             self.props,
+                                             self.elementId,
+                                             self.startNodeElementId,
+                                             self.endNodeElementId)
         )
 
     def __eq__(self, other):
@@ -252,7 +261,7 @@ class Path:
         )
 
     def __repr__(self):
-        return "<{}(nodes={}, relationships={})>".format(
+        return "<{}(nodes={!r}, relationships={!r})>".format(
             self.__class__.__name__, self.nodes, self.relationships
         )
 
@@ -271,11 +280,11 @@ CypherPath = Path
 class CypherPoint:
     def __init__(self, system, x, y, z=None):
         self.system = system
-        self.x = x
-        self.y = y
-        self.z = z
+        self.x = CypherFloat(x).value
+        self.y = CypherFloat(y).value
+        self.z = None if z is None else CypherFloat(z).value
         if system not in ("cartesian", "wgs84"):
-            raise ValueError("Invalid system: {}".format(system))
+            raise ValueError(f"Invalid system: {system}")
 
     def __str__(self):
         if self.z is None:
@@ -306,7 +315,7 @@ class CypherDate:
         self.day = int(day)
         for v in ("year", "month", "day"):
             if getattr(self, v) != locals()[v]:
-                raise ValueError("{} must be integer".format(v))
+                raise ValueError(f"{v} must be integer")
 
     def __str__(self):
         return "CypherDate(year={}, month={}, day={})".format(
@@ -338,7 +347,7 @@ class CypherTime:
             self.utc_offset_s = int(utc_offset_s)
         for v in ("hour", "minute", "second", "nanosecond", "utc_offset_s"):
             if getattr(self, v) != locals()[v]:
-                raise ValueError("{} must be integer".format(v))
+                raise ValueError(f"{v} must be integer")
 
     def __str__(self):
         return (
@@ -391,7 +400,7 @@ class CypherDateTime:
         for v in ("year", "month", "day", "hour", "minute", "second",
                   "nanosecond", "utc_offset_s"):
             if getattr(self, v) != locals()[v]:
-                raise ValueError("{} must be integer".format(v))
+                raise ValueError(f"{v} must be integer")
         if timezone_id is not None and utc_offset_s is None:
             raise ValueError("utc_offset_s must be provided if timezone_id "
                              "is given")
@@ -456,7 +465,7 @@ class CypherDuration:
 
         for v in ("months", "days", "seconds", "nanoseconds"):
             if getattr(self, v) != locals()[v]:
-                raise ValueError("{} must be integer".format(v))
+                raise ValueError(f"{v} must be integer")
 
     def __str__(self):
         return (
@@ -494,11 +503,11 @@ class CypherVector:
         self.data = data
         if isinstance(data, (bytes, bytearray)):
             # e.g. "ff 01"
-            self.data = " ".join("{:02x}".format(byte) for byte in data)
+            self.data = " ".join(f"{byte:02x}" for byte in data)
 
     def __str__(self):
         return (
-            "CypherVector(dtype={}, data={})".format(self.dtype, self.data)
+            f"CypherVector(dtype={self.dtype}, data={self.data})"
         )
 
     def __repr__(self):
@@ -513,6 +522,30 @@ class CypherVector:
 
         return all(getattr(self, attr) == getattr(other, attr)
                    for attr in ("dtype", "data"))
+
+
+class CypherUUID:
+    """
+    A Cypher UUID value.
+
+    :param value: The UUID as a standard hyphenated string,
+        e.g. "550e8400-e29b-41d4-a716-446655440000".
+    """
+
+    def __init__(self, value):
+        self.value = str(value)
+
+    def __str__(self):
+        return f"CypherUUID({self.value})"
+
+    def __repr__(self):
+        return f"<{self.__class__.__name__}({self.value})>"
+
+    def __eq__(self, other):
+        if not isinstance(other, type(self)):
+            return False
+
+        return self.value == other.value
 
 
 class CypherUnsupportedType:
@@ -597,6 +630,8 @@ def as_cypher_type(value):
         return CypherString(value)
     if isinstance(value, (bytes, bytearray)):
         return CypherBytes(value)
+    if isinstance(value, uuid.UUID):
+        return CypherUUID(value)
     if isinstance(
         value,
         (
@@ -610,7 +645,8 @@ def as_cypher_type(value):
             CypherDuration,
             CypherVector,
             CypherUnsupportedType,
+            CypherUUID,
         )
     ):
         return value
-    raise TypeError("Unsupported type: {}".format(type(value)))
+    raise TypeError(f"Unsupported type: {type(value)}")

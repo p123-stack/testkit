@@ -1,3 +1,16 @@
+#![warn(clippy::pedantic)]
+#![warn(clippy::allow_attributes_without_reason)]
+#![allow(
+    clippy::match_same_arms,
+    reason = "Improves readability and editability"
+)]
+#![allow(clippy::match_bool, reason = "Personal preference")]
+#![allow(clippy::single_match_else, reason = "Personal preference")]
+#![cfg_attr(
+    test,
+    allow(clippy::large_stack_arrays, reason = "rstest matrices can get big")
+)]
+
 mod bang_line;
 mod bolt_version;
 mod context;
@@ -100,7 +113,7 @@ fn main_raw_error() -> Result<(), MainError> {
 
     PARSED.get_or_init(move || engine);
 
-    for (ctx, py_line) in PARSED.get().unwrap().config.py_lines.iter() {
+    for (ctx, py_line) in &PARSED.get().unwrap().config.py_lines {
         debug!("Running Python bang ({ctx}): {py_line}");
         python::contextualize_res(run_python(py_line), *ctx, script_name, script)?;
     }
@@ -134,7 +147,7 @@ impl Display for MainError {
 impl Termination for MainResult {
     fn report(self) -> ExitCode {
         match self.0 {
-            Ok(_) => ExitCode::SUCCESS,
+            Ok(()) => ExitCode::SUCCESS,
             Err(MainError { err, code }) => {
                 let _ = io::stderr().write_fmt(format_args!("Error: {err:?}\n"));
                 code

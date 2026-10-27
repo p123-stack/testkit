@@ -23,7 +23,6 @@ pub(crate) fn parse_stubscript_hex_string(byte_str: &str) -> anyhow::Result<Vec<
         match u8::from_str_radix(&clean[i..i + 2], 16) {
             Ok(val) => {
                 res.push(val);
-                continue;
             }
             Err(e) => return Err(anyhow!(e)),
         }
@@ -141,8 +140,23 @@ pub(crate) fn fmt_bytes_compact(bytes: &[u8]) -> impl Display + '_ {
     BytesDisplay(bytes)
 }
 
+pub(crate) fn serialize_fmt_bytes(bytes: &[u8]) -> impl serde::Serialize + '_ {
+    struct BytesDisplay<'a>(&'a [u8]);
+
+    impl serde::Serialize for BytesDisplay<'_> {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            serializer.collect_str(&fmt_bytes(self.0))
+        }
+    }
+
+    BytesDisplay(bytes)
+}
+
 #[cfg(test)]
-mod test {
+mod tests {
     use rstest::rstest;
 
     use super::*;

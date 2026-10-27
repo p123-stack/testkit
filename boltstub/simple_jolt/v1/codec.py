@@ -20,7 +20,6 @@ import abc
 import importlib
 import inspect
 import re
-import sys
 
 from ..common.errors import (
     JOLTValueError,
@@ -276,10 +275,7 @@ def encode_bytes(value, human_readable=False):
     if not human_readable:
         return value.hex().upper()
     else:
-        if sys.version_info >= (3, 8):
-            return value.hex(" ").upper()
-        else:
-            return " ".join(f"{x:02X}" for x in value)
+        return value.hex(" ").upper()
 
 
 class JoltDictTransformer(JoltTypeTransformer):
@@ -647,8 +643,8 @@ encode_full = Codec.encode_full
 
 
 __all__ = [
-    Codec,
-    decode,
-    encode_simple,
-    encode_full,
+    "Codec",
+    "decode",
+    "encode_simple",
+    "encode_full",
 ]

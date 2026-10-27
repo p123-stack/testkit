@@ -29,14 +29,16 @@ password = "pass"
 class Standalone:
     """Single instance Neo4j server."""
 
-    def __init__(self, image, name, artifacts_path, hostname, port, version,
-                 edition):
+    def __init__(self, image, name, artifacts_path, hostname, port_bolt,
+                 port_http, version, edition, scheme):
         self.name = name
         self._image = image
         self._artifacts_path = join(artifacts_path, name)
         self._container = None
         self._hostname = hostname
-        self._port = port
+        self._port_bolt = port_bolt
+        self._port_http = port_http
+        self._scheme = scheme
         match = re.match(r"(\d+)\.dev", version)
         if match:
             self._version = (int(match.group(1)), float("inf"))
@@ -47,38 +49,48 @@ class Standalone:
 
     def start(self, network):
         # Environment variables passed to the Neo4j docker container
-        env_map = {
-            "NEO4J_AUTH": f"{username}/{password}",
-        }
+        accept_license = self._edition != "community"
+        env_map = _get_base_env_map(self._version, accept_license)
+
         if self._version < (5, 0):
             env_map.update({
                 "NEO4J_dbms_connector_bolt_advertised__address":
-                    "%s:%d" % (self._hostname, self._port),
+                    "%s:%d" % (self._hostname, self._port_bolt),
+                "NEO4J_dbms_connector_http_advertised__address":
+                    "%s:%d" % (self._hostname, self._port_http),
             })
         else:
             # Config options renamed in 5.0
             env_map.update({
                 "NEO4J_server_bolt_advertised__address":
-                    f"{self._hostname}:{self._port}",
+                    f"{self._hostname}:{self._port_bolt}",
+                "NEO4J_server_http_advertised__address":
+                    f"{self._hostname}:{self._port_http}",
             })
-        if self._version >= (5, 3) and len(password) < 8:
-            env_map["NEO4J_dbms_security_auth__minimum__password__length"] = \
-                str(len(password))
-        if self._version >= (5, 13):
-            env_map["NEO4J_server_bolt_telemetry_enabled"] = "true"
 
-        if self._edition != "community":
-            env_map["NEO4J_ACCEPT_LICENSE_AGREEMENT"] = "yes"
         logs_path = join(self._artifacts_path, "logs")
+        os.makedirs(logs_path, exist_ok=True)
         self._container = docker.run(
             self._image, self._hostname,
             mount_map={logs_path: "/logs"},
             env_map=env_map,
-            network=network
+            network=network,
+            log_path=logs_path,
+            background=True,
         )
 
     def addresses(self):
-        return [(self._hostname, self._port)]
+        if self._scheme in {"bolt", "neo4j"}:
+            return self.addresses_bolt()
+        if self._scheme == "http":
+            return self.addresses_http()
+        raise NotImplementedError(f"scheme {self._scheme} not supported")
+
+    def addresses_bolt(self):
+        return [(self._hostname, self._port_bolt)]
+
+    def addresses_http(self):
+        return [(self._hostname, self._port_http)]
 
     def stop(self):
         self._container.rm()
@@ -88,11 +100,13 @@ class Standalone:
 class Cluster:
     """Cluster of Neo4j servers."""
 
-    def __init__(self, image, name, artifacts_path, version, num_cores=3):
+    def __init__(self, image, name, artifacts_path, version, scheme,
+                 num_cores=3):
         self.name = name
         self._image = image
         self._artifacts_path = join(artifacts_path, name)
         self._version = version
+        self._scheme = scheme
         self._num_cores = num_cores
         self._cores = []
 
@@ -107,7 +121,17 @@ class Cluster:
             core.start(self._image, initial_members, network)
 
     def addresses(self):
+        if self._scheme in {"bolt", "neo4j"}:
+            return self.addresses_bolt()
+        if self._scheme == "http":
+            return self.addresses_http()
+        raise NotImplementedError(f"scheme {self._scheme} not supported")
+
+    def addresses_bolt(self):
         return [("core%d" % i, 7687) for i in range(self._num_cores)]
+
+    def addresses_http(self):
+        return [("core%d" % i, 7474) for i in range(self._num_cores)]
 
     def stop(self):
         for core in self._cores:
@@ -139,15 +163,7 @@ class Core:
             assert len(self._version) == 2
 
     def start(self, image, initial_members, network):
-        env_map = {
-            "NEO4J_ACCEPT_LICENSE_AGREEMENT": "yes",
-            "NEO4J_AUTH": f"{username}/{password}",
-        }
-
-        # Allow password to be short for testing
-        if self._version >= (5, 3) and len(password) < 8:
-            env_map["NEO4J_dbms_security_auth__minimum__password__length"] = \
-                str(len(password))
+        env_map = _get_base_env_map(self._version, accept_license=True)
 
         # Configure networking
         if self._version < (5, 0):
@@ -166,11 +182,15 @@ class Core:
             env_map.update({
                 "NEO4J_dbms_connector_bolt_advertised__address":
                     f"{self.name}:7687",
+                "NEO4J_dbms_connector_http_advertised__address":
+                    f"{self.name}:7474",
             })
         else:
             env_map.update({
                 "NEO4J_server_bolt_advertised__address":
                     f"{self.name}:7687",
+                "NEO4J_server_http_advertised__address":
+                    f"{self.name}:7474",
             })
 
         # Configure clustering
@@ -262,10 +282,45 @@ class Core:
 
         self._container = docker.run(
             image, self.name,
-            env_map=env_map, network=network, mount_map={logs_path: "/logs"},
-            log_path=self._artifacts_path, background=True
+            env_map=env_map,
+            network=network,
+            mount_map={logs_path: "/logs"},
+            log_path=self._artifacts_path,
+            background=True,
         )
 
     def stop(self):
         self._container.rm()
         self._container = None
+
+
+def _get_base_env_map(version, accept_license):
+    env_map = {"NEO4J_AUTH": f"{username}/{password}"}
+
+    if accept_license:
+        env_map["NEO4J_ACCEPT_LICENSE_AGREEMENT"] = "yes"
+
+    # Allow password to be short for testing
+    if version >= (5, 3) and len(password) < 8:
+        env_map["NEO4J_dbms_security_auth__minimum__password__length"] = \
+            str(len(password))
+
+    if version >= (5, 13):
+        env_map["NEO4J_server_bolt_telemetry_enabled"] = "true"
+
+    if (5, 19) <= version < (5, 25):
+        # these version need explicit enabling of the HTTP Query API
+        env_map.update({
+            "NEO4J_server_http__enabled__modules": (  # noqa: PAR001
+                "TRANSACTIONAL_ENDPOINTS,UNMANAGED_EXTENSIONS,BROWSER,"
+                "ENTERPRISE_MANAGEMENT_ENDPOINTS,QUERY_API_ENDPOINTS"
+            )
+        })
+    if (2025, 1) <= version < (2026, 4):
+        # Increase HTTP/Query API transaction identifier length: 4 -> 6.
+        # 6 is the modern default and allows for hitting the API harder
+        env_map.update({
+            "NEO4J_internal_server_queryapi_transactionid__length": "6",
+        })
+
+    return env_map

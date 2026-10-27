@@ -78,6 +78,8 @@ class NewDriver:
         notifications_disabled_categories=None,
         telemetry_disabled=None,
         client_certificate=None, client_certificate_provider_id=None,
+        disable_auto_commit_retries=None,
+        property_encryption_profiles=None,
     ):
         # Neo4j URI to connect to
         self.uri = uri
@@ -107,6 +109,10 @@ class NewDriver:
             self.notificationsDisabledCategories = notifications_disabled_categories  # noqa: E501
         if telemetry_disabled is not None:
             self.telemetryDisabled = telemetry_disabled
+        if disable_auto_commit_retries is not None:
+            self.disableAutoCommitRetries = disable_auto_commit_retries
+        if property_encryption_profiles is not None:
+            self.propertyEncryptionProfiles = property_encryption_profiles
         # (bool) whether to enable or disable encryption
         # field missing in message: use driver default (should be False)
         if encrypted is not None:
@@ -152,6 +158,14 @@ class AuthorizationToken:
         if not isinstance(other, AuthorizationToken):
             return NotImplemented
         return vars(self) == vars(other)
+
+    def __repr__(self):
+        vars_repr = ", ".join(
+            f"{k}={v!r}" for k, v in vars(self).items() if k != "scheme"
+        )
+        if vars_repr:
+            vars_repr = f", {vars_repr}"
+        return f"AuthorizationToken({self.scheme!r}{vars_repr})"
 
 
 class AuthTokenAndExpiration:
@@ -499,7 +513,8 @@ class NewSession:
                  database=None, fetchSize=None, impersonatedUser=None,
                  bookmark_manager=None, auth_token=None,
                  notifications_min_severity=None,
-                 notifications_disabled_categories=None):
+                 notifications_disabled_categories=None,
+                 disable_auto_commit_retries=None):
         # Id of driver on backend that session should be created on
         self.driverId = driverId
         # Session accessmode: 'r' for read access and 'w' for write access.
@@ -513,6 +528,8 @@ class NewSession:
             self.notificationsMinSeverity = notifications_min_severity
         if notifications_disabled_categories is not None:
             self.notificationsDisabledCategories = notifications_disabled_categories  # noqa: E501
+        if disable_auto_commit_retries is not None:
+            self.disableAutoCommitRetries = disable_auto_commit_retries
 
         if bookmark_manager is not None:
             self.bookmarkManagerId = bookmark_manager.id
@@ -885,3 +902,155 @@ class FakeTimeUninstall:
     """
 
     pass
+
+
+class EncryptToBytes:
+    """
+    Request to encrypt a value using client-side property encryption.
+
+    The backend should respond with an EncryptedValue or an Error response.
+
+    :param driver_id: The id of the driver to encrypt with.
+    :param value: The property value to encrypt.
+    :param aad: The additional authenticated data (AAD) to bind to the
+        ciphertext, or None for no AAD.
+    :param profile_name: The name of the encryption profile to use, or None
+        to use the sole configured profile.
+    :param key_alias: The alias of the data encryption key to encrypt with.
+        Mutually exclusive with key_id; exactly one of the two must be set.
+    :param key_id: The repository-assigned id of the data encryption key to
+        encrypt with. Mutually exclusive with key_alias; exactly one of the
+        two must be set.
+    :param iv: The exact 12-byte IV the driver must use for this
+        encrypt call, or None to draw a random one. A backend should reject
+        an IV that is not exactly 12 bytes, but is not expected to verify
+        that the IV was consumed. Used to assert byte-exact ciphertext in
+        the deterministic encryption tests.
+    """
+
+    def __init__(self, driver_id, value, aad=None, profile_name=None,
+                 key_alias=None, key_id=None, iv=None):
+        self.driverId = driver_id
+        self.value = value
+        self.aad = aad
+        self.profileName = profile_name
+        self.keyAlias = key_alias
+        self.keyId = key_id
+        self.iv = iv
+
+
+class Decrypt:
+    """
+    Request to decrypt a value using client-side property encryption.
+
+    The backend should respond with a DecryptedValue or an Error response.
+
+    :param driver_id: The id of the driver to decrypt with.
+    :param value: The encrypted value to decrypt, as returned by
+        EncryptToBytes.
+    :param aad: The additional authenticated data (AAD) to reproduce, or
+        None to use the AAD persisted alongside the encrypted value.
+        Mutually exclusive with use_persisted_aad; exactly one of the two
+        must be set.
+    :param use_persisted_aad: Whether to use the AAD persisted alongside the
+        encrypted value. Mutually exclusive with aad; exactly one of the two
+        must be set.
+    """
+
+    def __init__(self, driver_id, value, aad=None, use_persisted_aad=False):
+        self.driverId = driver_id
+        self.value = value
+        self.aad = aad
+        self.usePersistedAad = use_persisted_aad
+
+
+class CreateEncapsulatedKey:
+    """
+    Request to create a new encapsulated data encryption key.
+
+    The backend should respond with an EncapsulatedKey or an Error response.
+
+    :param driver_id: The id of the driver to create the key with.
+    :param alias: The alias to bind to the new key.
+    :param profile_name: The name of the encryption profile to create the
+        key for, or None to use the sole configured profile.
+    """
+
+    def __init__(self, driver_id, alias, profile_name=None):
+        self.driverId = driver_id
+        self.alias = alias
+        self.profileName = profile_name
+
+
+class EncapsulatedKeyRepositoryFindByIdCompleted:
+    """
+    Answers an EncapsulatedKeyRepositoryFindByIdRequest.
+
+    :param request_id: Id of the request this answers.
+    :param record: The matching key record (a dict with id/alias/
+        encapsulation/metadata keys), or None if no key has that id.
+    """
+
+    def __init__(self, request_id, record=None):
+        self.requestId = request_id
+        self.record = record
+
+
+class EncapsulatedKeyRepositoryFindByAliasCompleted:
+    """
+    Answers an EncapsulatedKeyRepositoryFindByAliasRequest.
+
+    :param request_id: Id of the request this answers.
+    :param record: The matching key record, or None if no key has that
+        alias.
+    """
+
+    def __init__(self, request_id, record=None):
+        self.requestId = request_id
+        self.record = record
+
+
+class EncapsulatedKeyRepositoryCreateCompleted:
+    """
+    Answers an EncapsulatedKeyRepositoryCreateRequest.
+
+    :param request_id: Id of the request this answers.
+    :param record: The created key record.
+    """
+
+    def __init__(self, request_id, record):
+        self.requestId = request_id
+        self.record = record
+
+
+class EncapsulatedKeyRepositorySetAliasCompleted:
+    """Answers an EncapsulatedKeyRepositorySetAliasRequest."""
+
+    def __init__(self, request_id):
+        self.requestId = request_id
+
+
+class EncapsulatedKeyRepositoryDeleteCompleted:
+    """Answers an EncapsulatedKeyRepositoryDeleteRequest."""
+
+    def __init__(self, request_id):
+        self.requestId = request_id
+
+
+class EncapsulatedKeyRepositoryErrorCompleted:
+    """
+    Answers any EncapsulatedKeyRepository*Request with a repository failure.
+
+    :param request_id: Id of the request this answers.
+    :param error_type: "KeyNotFound", "AliasInUse", "UnknownRepository"
+        when the request named a repository TestKit did not assign to a
+        live driver, or "InvalidEncapsulation" when the encapsulation was
+        not a hex string.
+    :param detail: The key id, alias, repository id or encapsulation the
+        error concerns.
+    """
+
+    def __init__(self, request_id, error_type, detail=None):
+        self.requestId = request_id
+        self.errorType = error_type
+        self.detail = detail

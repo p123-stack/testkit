@@ -44,9 +44,13 @@ class Transaction:
     def __exit__(self, exc_type, exc_value, traceback):
         if self._closed:
             return
-        if exc_type is not None:
-            cm = contextlib.suppress(Exception)
-        else:
-            cm = contextlib.nullcontext()
+        # An exception here is the test's failure (or an error the test
+        # asserts). Closing still has to run, and a close failure must not
+        # hide the original exception.
+        cm = (
+            contextlib.suppress(Exception)
+            if exc_type is not None
+            else contextlib.nullcontext()
+        )
         with cm:
             self.close()

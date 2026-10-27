@@ -343,6 +343,118 @@ class Transaction:
         self.id = id
 
 
+class EncryptedValue:
+    """
+    The result of encrypting a value with client-side property encryption.
+
+    Sent in response to an EncryptToBytes request.
+    """
+
+    def __init__(self, encryptedBytes):
+        self.encrypted_bytes = bytes.fromhex(encryptedBytes)
+
+
+class DecryptedValue:
+    """
+    The result of decrypting a value with client-side property encryption.
+
+    Sent in response to a Decrypt request.
+    """
+
+    def __init__(self, decryptedValue):
+        self.decrypted_value = decryptedValue
+
+
+class EncapsulatedKey:
+    """
+    An encapsulated data encryption key.
+
+    Sent in response to a CreateEncapsulatedKey request.
+    """
+
+    def __init__(self, id, alias):
+        self.id = id
+        self.alias = alias
+
+
+class EncapsulatedKeyRepositoryFindByIdRequest:
+    """
+    Represents a need to look up an encapsulated key by id.
+
+    This message may be sent by the backend at any time should the driver
+    call FindByIdAsync on a reverse-request-backed repository. TestKit will
+    respond with EncapsulatedKeyRepositoryFindByIdCompleted.
+    """
+
+    def __init__(self, id, repositoryId, keyId):
+        self.id = id
+        self.repository_id = repositoryId
+        self.key_id = keyId
+
+
+class EncapsulatedKeyRepositoryFindByAliasRequest:
+    """
+    Represents a need to look up an encapsulated key by alias.
+
+    This message may be sent by the backend at any time should the driver
+    call FindByAliasAsync on a reverse-request-backed repository. TestKit
+    will respond with EncapsulatedKeyRepositoryFindByAliasCompleted.
+    """
+
+    def __init__(self, id, repositoryId, alias):
+        self.id = id
+        self.repository_id = repositoryId
+        self.alias = alias
+
+
+class EncapsulatedKeyRepositoryCreateRequest:
+    """
+    Represents a need to create a new encapsulated key.
+
+    This message may be sent by the backend at any time should the driver
+    call CreateAsync on a reverse-request-backed repository. TestKit will
+    respond with EncapsulatedKeyRepositoryCreateCompleted.
+    """
+
+    def __init__(self, id, repositoryId, alias, encapsulation, metadata):
+        self.id = id
+        self.repository_id = repositoryId
+        self.alias = alias
+        self.encapsulation = encapsulation
+        self.metadata = metadata
+
+
+class EncapsulatedKeyRepositorySetAliasRequest:
+    """
+    Represents a need to rebind (or clear) an encapsulated key's alias.
+
+    This message may be sent by the backend at any time should the driver
+    call SetAliasByIdAsync on a reverse-request-backed repository. TestKit
+    will respond with EncapsulatedKeyRepositorySetAliasCompleted.
+    """
+
+    def __init__(self, id, repositoryId, keyId, alias=None):
+        self.id = id
+        self.repository_id = repositoryId
+        self.key_id = keyId
+        self.alias = alias
+
+
+class EncapsulatedKeyRepositoryDeleteRequest:
+    """
+    Represents a need to delete an encapsulated key.
+
+    This message may be sent by the backend at any time should the driver
+    call DeleteByIdAsync on a reverse-request-backed repository. TestKit
+    will respond with EncapsulatedKeyRepositoryDeleteCompleted.
+    """
+
+    def __init__(self, id, repositoryId, keyId):
+        self.id = id
+        self.repository_id = repositoryId
+        self.key_id = keyId
+
+
 class Result:
     """Represents a result instance on the backend."""
 
@@ -388,10 +500,13 @@ class Record:
         v = []
         for x in self.values:
             v.append(str(x))
-        return "Record, values {}".format(v)
+        return f"Record, values {' '.join(v)}"
 
     def __repr__(self):
-        return self.__str__()
+        v = []
+        for x in self.values:
+            v.append(repr(x))
+        return f"<Record values {' '.join(v)}>"
 
 
 class Field:
@@ -406,7 +521,7 @@ class Field:
         return other.value == self.value
 
     def __str__(self):
-        return "Field, value {}".format(self.value)
+        return f"Field, value {self.value}"
 
     def __repr__(self):
         return self.__str__()

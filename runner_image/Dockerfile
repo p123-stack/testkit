@@ -1,19 +1,27 @@
-FROM ubuntu:20.04 AS build
+# syntax=docker/dockerfile:1.4
+FROM ubuntu:24.04 AS build
+
+ARG BUILD_RUST_STUB=true
 
 WORKDIR /root/build/boltstub
-RUN apt-get update && \
-    apt-get install -y \
-        python3 \
-        python3-dev \
-        python3-pip \
-        curl \
-    && rm -rf /var/lib/apt/lists/*
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
-RUN --mount=from=boltstub,target=/tmp/boltstub cp -r /tmp/boltstub/* .
-RUN cargo build --release
+RUN --mount=from=boltstub,target=/tmp/boltstub <<EOF
+set -e
+if [ "$BUILD_RUST_STUB" = "true" ]; then
+    apt-get update
+    apt-get install -y python3 python3-dev gcc curl
+    rm -rf /var/lib/apt/lists/*
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    export PATH="/root/.cargo/bin:$PATH"
+    cp -r /tmp/boltstub/* .
+    cargo build --release
+    cp target/release/boltstub /root/build/boltstub-bin
+else
+    touch /root/build/boltstub-bin
+    chmod +x /root/build/boltstub-bin
+fi
+EOF
 
-FROM ubuntu:20.04
+FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
@@ -22,8 +30,8 @@ RUN apt-get update && \
         tzdata \
         python3 \
         python3-pip \
+        python3-venv \
         golang \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=build /root/build/boltstub/target/release/boltstub /usr/local/bin/boltstub
-
+COPY --from=build /root/build/boltstub-bin /usr/local/bin/boltstub
 ENV PYTHON=python3

@@ -18,7 +18,6 @@
 
 import datetime
 import re
-from typing import Union
 
 import pytz
 
@@ -372,7 +371,7 @@ class JoltV1DateTimeMixin(_JoltParsedType):
         return cls(cls._format_s_ns_tz_info(seconds, nanoseconds, tz_info))
 
     @classmethod
-    def new(cls, seconds: int, nanoseconds: int, tz: Union[int, str]):
+    def new(cls, seconds: int, nanoseconds: int, tz: int | str):
         extra_seconds, nanoseconds = divmod(nanoseconds, 1000000000)
         seconds += extra_seconds
         if isinstance(tz, int):
@@ -649,16 +648,16 @@ class JoltPath(JoltV1PathMixin, JoltType):
 
 
 __all__ = [
-    JoltType,
-    JoltDate,
-    JoltTime,
-    JoltLocalTime,
-    JoltDateTime,
-    JoltLocalDateTime,
-    JoltDuration,
-    JoltPoint,
-    JoltNode,
-    JoltRelationship,
-    JoltPath,
-    JoltWildcard,
+    "JoltType",
+    "JoltDate",
+    "JoltTime",
+    "JoltLocalTime",
+    "JoltDateTime",
+    "JoltLocalDateTime",
+    "JoltDuration",
+    "JoltPoint",
+    "JoltNode",
+    "JoltRelationship",
+    "JoltPath",
+    "JoltWildcard",
 ]
